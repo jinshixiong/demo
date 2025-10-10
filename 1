@@ -1,0 +1,195 @@
+---
+- name: 监控多机房Zookeeper集群状态
+  hosts: zookeeper_clusters
+  gather_facts: true
+  serial: 3
+  any_errors_fatal: false
+  
+  vars:
+    # 按机房分组显示结果
+    show_results_by_idc: true
+  
+  tasks:
+    - name: 包含监控任务
+      include_role:
+        name: zk-monitoring
+  
+  post_tasks:
+    - name: 按机房显示统计结果
+      run_once: true
+      delegate_to: localhost
+      block:
+        - name: 收集北京机房结果
+          set_fact:
+            beijing_results: "{{ groups['beijing_zk'] | map('extract', hostvars, 'zk_status') | list }}"
+          when: groups['beijing_zk'] is defined
+        
+        - name: 收集上海机房结果
+          set_fact:
+            shanghai_results: "{{ groups['shanghai_zk'] | map('extract', hostvars, 'zk_status') | list }}"
+          when: groups['shanghai_zk'] is defined
+        
+        - name: 收集广州机房结果
+          set_fact:
+            guangzhou_results: "{{ groups['guangzhou_zk'] | map('extract', hostvars, 'zk_status') | list }}"
+          when: groups['guangzhou_zk'] is defined
+        
+        - name: 显示监控报告
+          template:
+            src: zk-status.j2
+            dest: "/tmp/zk-status-report-{{ ansible_date_time.epoch }}.txt"
+          delegate_to: localhost
+          when: show_results_by_idc
+
+
+---
+- name: 检查Zookeeper进程状态
+  shell: "ps aux | grep -v grep | grep zookeeper"
+  register: zk_process
+  ignore_errors: true
+  changed_when: false
+
+- name: 检查Zookeeper服务状态
+  shell: "{{ zookeeper_bin }} status 2>/dev/null || echo 'NOT_RUNNING'"
+  register: zk_service_status
+  changed_when: false
+  environment:
+    JAVA_HOME: "/usr/lib/jvm/java-8-openjdk-amd64"
+
+- name: 获取系统内存使用率
+  shell: |
+    free | awk 'NR==2{printf "%.2f", $3*100/$2}'
+  register: memory_usage
+  changed_when: false
+
+- name: 获取磁盘使用率
+  shell: |
+    df -h {{ zookeeper_data_dir }} | awk 'NR==2{print $5}' | sed 's/%//'
+  register: disk_usage_data
+  changed_when: false
+
+- name: 获取系统磁盘使用率
+  shell: |
+    df -h / | awk 'NR==2{print $5}' | sed 's/%//'
+  register: disk_usage_system
+  changed_when: false
+
+- name: 获取Zookeeper数据目录大小
+  shell: |
+    du -sh {{ zookeeper_data_dir }} 2>/dev/null || echo "0"
+  register: zk_data_size
+  changed_when: false
+
+- name: 检查Zookeeper端口监听
+  wait_for:
+    host: "{{ ansible_default_ipv4.address }}"
+    port: 2181
+    timeout: 5
+  ignore_errors: true
+  register: zk_port_check
+
+- name: 获取Zookeeper四字命令状态
+  shell: |
+    echo stat | nc localhost 2181 | head -10
+  ignore_errors: true
+  register: zk_four_letter
+  changed_when: false
+
+- name: 解析Zookeeper服务状态
+  set_fact:
+    zk_status_parsed: >
+      {% if zk_service_status.stdout == "NOT_RUNNING" %}
+        STOPPED
+      {% elif "Error" in zk_service_status.stdout %}
+        ERROR
+      {% elif "running" in zk_service_status.stdout %}
+        RUNNING
+      {% elif "standalone" in zk_service_status.stdout %}
+        STANDALONE
+      {% elif "follower" in zk_service_status.stdout %}
+        FOLLOWER
+      {% elif "leader" in zk_service_status.stdout %}
+        LEADER
+      {% else %}
+        UNKNOWN
+      {% endif %}
+
+- name: 设置监控状态颜色标记
+  set_fact:
+    memory_status: >
+      {% if memory_usage.stdout | float > memory_warning_threshold %}❌
+      {% else %}✅{% endif %}
+    disk_status: >
+      {% if disk_usage_data.stdout | float > disk_warning_threshold %}❌
+      {% else %}✅{% endif %}
+    service_status: >
+      {% if zk_status_parsed in ['RUNNING', 'LEADER', 'FOLLOWER', 'STANDALONE'] %}✅
+      {% else %}❌{% endif %}
+
+- name: 汇总监控信息
+  set_fact:
+    zk_status:
+      hostname: "{{ inventory_hostname }}"
+      idc: "{{ group_names | select('match', 'beijing|shanghai|guangzhou') | first | regex_replace('_zk', '') | upper }}"
+      memory_usage: "{{ memory_usage.stdout }}%"
+      disk_usage_data: "{{ disk_usage_data.stdout }}%"
+      disk_usage_system: "{{ disk_usage_system.stdout }}%"
+      zk_data_size: "{{ zk_data_size.stdout }}"
+      service_status: "{{ zk_status_parsed }}"
+      memory_status: "{{ memory_status }}"
+      disk_status: "{{ disk_status }}"
+      service_health: "{{ service_status }}"
+      last_checked: "{{ ansible_date_time.iso8601 }}"
+
+- name: 显示单节点监控结果
+  debug:
+    msg: |
+      ===== Zookeeper监控结果 =====
+      主机: {{ zk_status.hostname }}
+      机房: {{ zk_status.idc }}
+      内存使用率: {{ zk_status.memory_usage }} {{ zk_status.memory_status }}
+      数据盘使用率: {{ zk_status.disk_usage_data }} {{ zk_status.disk_status }}
+      系统盘使用率: {{ zk_status.disk_usage_system }}
+      ZK数据大小: {{ zk_status.zk_data_size }}
+      服务状态: {{ zk_status.service_status }} {{ zk_status.service_health }}
+    var: zk_status
+
+
+================================================================================
+                    ZOOKEEPER 多机房监控报告
+生成时间: {{ ansible_date_time.iso8601 }}
+================================================================================
+
+{% if beijing_results is defined %}
+北京机房 ({{ beijing_results | length }} 节点):
+{% for result in beijing_results %}
+  {{ "%-15s" | format(result.hostname) }} | 内存: {{ "%-6s" | format(result.memory_usage) }} {{ result.memory_status }} | 数据盘: {{ "%-6s" | format(result.disk_usage_data) }} {{ result.disk_status }} | 服务: {{ "%-10s" | format(result.service_status) }} {{ result.service_health }}
+{% endfor %}
+{% endif %}
+
+{% if shanghai_results is defined %}
+上海机房 ({{ shanghai_results | length }} 节点):
+{% for result in shanghai_results %}
+  {{ "%-15s" | format(result.hostname) }} | 内存: {{ "%-6s" | format(result.memory_usage) }} {{ result.memory_status }} | 数据盘: {{ "%-6s" | format(result.disk_usage_data) }} {{ result.disk_status }} | 服务: {{ "%-10s" | format(result.service_status) }} {{ result.service_health }}
+{% endfor %}
+{% endif %}
+
+{% if guangzhou_results is defined %}
+广州机房 ({{ guangzhou_results | length }} 节点):
+{% for result in guangzhou_results %}
+  {{ "%-15s" | format(result.hostname) }} | 内存: {{ "%-6s" | format(result.memory_usage) }} {{ result.memory_status }} | 数据盘: {{ "%-6s" | format(result.disk_usage_data) }} {{ result.disk_status }} | 服务: {{ "%-10s" | format(result.service_status) }} {{ result.service_health }}
+{% endfor %}
+{% endif %}
+
+================================================================================
+汇总统计:
+{% if beijing_results is defined %}
+北京机房: {{ beijing_results | selectattr("service_status", "in", ["RUNNING", "LEADER", "FOLLOWER"]) | list | length }}/{{ beijing_results | length }} 节点正常运行
+{% endif %}
+{% if shanghai_results is defined %}
+上海机房: {{ shanghai_results | selectattr("service_status", "in", ["RUNNING", "LEADER", "FOLLOWER"]) | list | length }}/{{ shanghai_results | length }} 节点正常运行
+{% endif %}
+{% if guangzhou_results is defined %}
+广州机房: {{ guangzhou_results | selectattr("service_status", "in", ["RUNNING", "LEADER", "FOLLOWER"]) | list | length }}/{{ guangzhou_results | length }} 节点正常运行
+{% endif %}
+================================================================================
