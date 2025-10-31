@@ -1,0 +1,368 @@
+<template>
+  <div>
+    <!-- 触发按钮 -->
+    <el-button 
+      type="primary" 
+      @click="showLogDialog"
+      size="small"
+    >
+      <i class="el-icon-document"></i>
+      查看日志
+    </el-button>
+
+    <!-- 简单日志展示弹窗 -->
+    <el-dialog
+      title="运行日志"
+      :visible.sync="logDialogVisible"
+      width="70%"
+      top="5vh"
+      custom-class="simple-log-dialog"
+    >
+      <!-- 日志内容区域 -->
+      <div class="simple-log-content" ref="logContent">
+        <pre class="log-text" v-if="logContent">
+          <div 
+            v-for="(line, index) in logLines" 
+            :key="index"
+            class="log-line"
+            :class="getLineColor(line)"
+          >
+            {{ line }}
+          </div>
+        </pre>
+        
+        <div v-else class="empty-log">
+          <i class="el-icon-document"></i>
+          <p>暂无日志内容</p>
+        </div>
+      </div>
+
+      <!-- 底部操作 -->
+      <div slot="footer" class="simple-dialog-footer">
+        <el-button @click="logDialogVisible = false">关闭</el-button>
+        <el-button 
+          type="primary" 
+          @click="copyLogContent"
+          :disabled="!logContent"
+        >
+          复制日志
+        </el-button>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<script>
+export default {
+  name: 'SimpleLogDialog',
+  
+  props: {
+    // 接收日志内容
+    logData: {
+      type: String,
+      default: ''
+    }
+  },
+  
+  data() {
+    return {
+      logDialogVisible: false,
+      logContent: ''
+    }
+  },
+  
+  computed: {
+    // 将日志内容按行分割
+    logLines() {
+      if (!this.logContent) return []
+      return this.logContent.split('\n')
+    }
+  },
+  
+  methods: {
+    // 显示日志弹窗
+    showLogDialog() {
+      // 如果没有传入logData，使用默认的示例日志
+      this.logContent = this.logData || this.getDefaultLog()
+      this.logDialogVisible = true
+      
+      // 弹窗显示后自动滚动到底部
+      this.$nextTick(() => {
+        this.scrollToBottom()
+      })
+    },
+    
+    // 获取默认示例日志
+    getDefaultLog() {
+      return `[INFO] 开始执行任务
+[DEBUG] 初始化参数完成
+[INFO] 连接到目标服务器
+[WARNING] 发现配置警告
+[ERROR] 执行过程中出现错误
+[INFO] 任务执行完成
+[SUCCESS] 操作成功`
+    },
+    
+    // 根据行内容确定颜色
+    getLineColor(line) {
+      if (line.includes('[ERROR]')) {
+        return 'log-error'
+      } else if (line.includes('[WARNING]')) {
+        return 'log-warning'
+      } else if (line.includes('[SUCCESS]')) {
+        return 'log-success'
+      } else if (line.includes('[INFO]')) {
+        return 'log-info'
+      } else if (line.includes('[DEBUG]')) {
+        return 'log-debug'
+      }
+      return 'log-default'
+    },
+    
+    // 滚动到底部
+    scrollToBottom() {
+      const container = this.$refs.logContent
+      if (container) {
+        container.scrollTop = container.scrollHeight
+      }
+    },
+    
+    // 复制日志内容
+    copyLogContent() {
+      if (!this.logContent) return
+      
+      // 使用现代API
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(this.logContent).then(() => {
+          this.$message.success('日志内容已复制到剪贴板')
+        }).catch(() => {
+          this.fallbackCopy()
+        })
+      } else {
+        this.fallbackCopy()
+      }
+    },
+    
+    // 降级复制方案
+    fallbackCopy() {
+      const textarea = document.createElement('textarea')
+      textarea.value = this.logContent
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      this.$message.success('日志内容已复制到剪贴板')
+    }
+  }
+}
+</script>
+
+<style scoped>
+/* 日志内容容器 */
+.simple-log-content {
+  height: 400px;
+  overflow: auto;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+/* 日志文本样式 */
+.log-text {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 日志行样式 */
+.log-line {
+  padding: 2px 0;
+  border-left: 3px solid transparent;
+  padding-left: 8px;
+  margin: 1px 0;
+}
+
+/* 不同级别的颜色 */
+.log-error {
+  color: #f56c6c;
+  border-left-color: #f56c6c;
+  background: rgba(245, 108, 108, 0.05);
+}
+
+.log-warning {
+  color: #e6a23c;
+  border-left-color: #e6a23c;
+  background: rgba(230, 162, 60, 0.05);
+}
+
+.log-success {
+  color: #67c23a;
+  border-left-color: #67c23a;
+  background: rgba(103, 194, 58, 0.05);
+}
+
+.log-info {
+  color: #409eff;
+  border-left-color: #409eff;
+  background: rgba(64, 158, 255, 0.05);
+}
+
+.log-debug {
+  color: #909399;
+  border-left-color: #909399;
+  background: rgba(144, 147, 153, 0.05);
+}
+
+.log-default {
+  color: #606266;
+}
+
+/* 空状态 */
+.empty-log {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #909399;
+}
+
+.empty-log i {
+  font-size: 48px;
+  margin-bottom: 16px;
+  color: #c0c4cc;
+}
+
+/* 底部操作 */
+.simple-dialog-footer {
+  text-align: right;
+}
+</style>
+
+
+<template>
+  <div class="demo-page">
+    <h2>简单日志展示示例</h2>
+    
+    <!-- 使用日志弹窗组件 -->
+    <simple-log-dialog 
+      :log-data="ansibleLog" 
+      ref="logDialog"
+    />
+    
+    <!-- 或者手动控制 -->
+    <el-button 
+      @click="showCustomLog"
+      type="success"
+      style="margin-left: 10px;"
+    >
+      显示自定义日志
+    </el-button>
+    
+    <!-- 测试不同内容的日志 -->
+    <div style="margin-top: 20px;">
+      <el-button 
+        v-for="(log, index) in testLogs" 
+        :key="index"
+        @click="showTestLog(log.content)"
+        size="mini"
+        style="margin-right: 10px; margin-bottom: 5px;"
+      >
+        {{ log.name }}
+      </el-button>
+    </div>
+  </div>
+</template>
+
+<script>
+import SimpleLogDialog from '@/components/SimpleLogDialog.vue'
+
+export default {
+  components: {
+    SimpleLogDialog
+  },
+  
+  data() {
+    return {
+      // 示例 Ansible 日志
+      ansibleLog: `[INFO] 开始执行 Ansible Playbook
+[DEBUG] 加载 inventory 文件: /etc/ansible/hosts
+[INFO] PLAY [web_servers] ****************************************************
+[INFO] TASK [Gathering Facts] ************************************************
+[INFO] ok: [web-server-01]
+[INFO] ok: [web-server-02]
+[INFO] TASK [Install nginx] **************************************************
+[INFO] changed: [web-server-01]
+[WARNING] web-server-02: nginx 已安装，跳过
+[INFO] TASK [Start nginx service] ********************************************
+[INFO] changed: [web-server-01]
+[ERROR] web-server-02: 启动 nginx 失败
+[INFO] PLAY RECAP ***********************************************************
+[INFO] web-server-01: ok=3 changed=2 unreachable=0 failed=0
+[INFO] web-server-02: ok=2 changed=0 unreachable=0 failed=1
+[SUCCESS] Playbook 执行完成`,
+
+      // 测试用不同日志
+      testLogs: [
+        {
+          name: '成功日志',
+          content: `[INFO] 任务开始
+[INFO] 步骤1完成
+[INFO] 步骤2完成
+[SUCCESS] 所有任务执行成功`
+        },
+        {
+          name: '错误日志',
+          content: `[INFO] 任务开始
+[WARNING] 发现配置问题
+[ERROR] 执行失败: 连接超时
+[ERROR] 任务中止`
+        },
+        {
+          name: '混合日志',
+          content: `[DEBUG] 初始化系统
+[INFO] 加载配置
+[WARNING] 使用默认参数
+[INFO] 执行操作
+[ERROR] 操作失败
+[INFO] 重试中...
+[SUCCESS] 操作成功完成`
+        }
+      ]
+    }
+  },
+  
+  methods: {
+    // 显示自定义日志
+    showCustomLog() {
+      const customLog = `[INFO] 这是自定义日志内容
+[DEBUG] 调试信息
+[WARNING] 警告信息
+[ERROR] 错误信息
+[SUCCESS] 成功信息`
+      
+      // 通过ref调用组件方法
+      this.$refs.logDialog.logContent = customLog
+      this.$refs.logDialog.logDialogVisible = true
+    },
+    
+    // 显示测试日志
+    showTestLog(content) {
+      this.$refs.logDialog.logContent = content
+      this.$refs.logDialog.logDialogVisible = true
+    }
+  }
+}
+</script>
+
+<style scoped>
+.demo-page {
+  padding: 20px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+</style>
